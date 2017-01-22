@@ -1,3 +1,5 @@
+import pdb
+
 import tools.find_mxnet
 import mxnet as mx
 import logging
@@ -44,6 +46,7 @@ def load_pascal(image_set, year, devkit_path, shuffle=False):
 
     imdbs = []
     for s, y in zip(image_set, year):
+        # trainval 2007 VOCdevkit true 
         imdbs.append(PascalVoc(s, y, devkit_path, shuffle, is_train=True))
     if len(imdbs) > 1:
         return ConcatDB(imdbs, shuffle)
@@ -63,7 +66,7 @@ def convert_pretrained(name, args):
     ---------
     processed arguments as dict
     """
-    if name == 'vgg16_reduced':
+    if name.endswith('vgg16_reduced'): # md : name == 'vgg16_reduced'
         args['conv6_bias'] = args.pop('fc6_bias')
         args['conv6_weight'] = args.pop('fc6_weight')
         args['conv7_bias'] = args.pop('fc7_bias')
@@ -151,18 +154,20 @@ def train_net(net, dataset, image_set, year, devkit_path, batch_size,
 
     # check args
     if isinstance(data_shape, int):
-        data_shape = (data_shape, data_shape)
+        data_shape = (data_shape, data_shape) # 300x300
     assert len(data_shape) == 2, "data_shape must be (h, w) tuple or list or int"
-    prefix += '_' + str(data_shape[0])
+    prefix += '_' + str(data_shape[0]) # _300
 
     if isinstance(mean_pixels, (int, float)):
         mean_pixels = [mean_pixels, mean_pixels, mean_pixels]
-    assert len(mean_pixels) == 3, "must provide all RGB mean values"
+    assert len(mean_pixels) == 3, "must provide all RGB mean values" # (r, g, b)
 
     # load dataset
     if dataset == 'pascal':
+        # trainval '2007,2012' 'data/VOCdevkit' True
         imdb = load_pascal(image_set, year, devkit_path, cfg.TRAIN.INIT_SHUFFLE)
         if val_set and val_year:
+            # test '2007' 'data/VOCdevkit' False
             val_imdb = load_pascal(val_set, val_year, devkit_path, False)
         else:
             val_imdb = None
@@ -174,8 +179,10 @@ def train_net(net, dataset, image_set, year, devkit_path, batch_size,
                          cfg.TRAIN.RAND_SAMPLERS, cfg.TRAIN.RAND_MIRROR,
                          cfg.TRAIN.EPOCH_SHUFFLE, cfg.TRAIN.RAND_SEED,
                          is_train=True)
+
+    
     # save per N epoch, avoid saving too frequently
-    resize_epoch = int(cfg.TRAIN.RESIZE_EPOCH)
+    resize_epoch = int(cfg.TRAIN.RESIZE_EPOCH) # 1
     if resize_epoch > 1:
         batches_per_epoch = ((imdb.num_images - 1) / batch_size + 1) * resize_epoch
         train_iter = mx.io.ResizeIter(train_iter, batches_per_epoch)
@@ -189,7 +196,7 @@ def train_net(net, dataset, image_set, year, devkit_path, batch_size,
     else:
         val_iter = None
 
-    # load symbol
+    # load symbol    vgg16_reduced
     sys.path.append(os.path.join(cfg.ROOT_DIR, 'symbol'))
     net = importlib.import_module("symbol_" + net).get_symbol_train(imdb.num_classes)
 
@@ -212,15 +219,15 @@ def train_net(net, dataset, image_set, year, devkit_path, batch_size,
         # the prediction convolution layers name starts with relu, so it's fine
         fixed_param_names = [name for name in net.list_arguments() \
             if name.startswith('conv')]
-    elif pretrained:
+    elif pretrained:            # do this
         logger.info("Start training with {} from pretrained model {}"
             .format(ctx_str, pretrained))
-        _, args, auxs = mx.model.load_checkpoint(pretrained, epoch)
-        args = convert_pretrained(pretrained, args)
+        _, args_, auxs = mx.model.load_checkpoint(pretrained, epoch)
+        args_ = convert_pretrained(pretrained, args_)
     else:
         logger.info("Experimental: start training from scratch with {}"
             .format(ctx_str))
-        args = None
+        args_ = None
         auxs = None
         fixed_param_names = None
 
@@ -232,10 +239,10 @@ def train_net(net, dataset, image_set, year, devkit_path, batch_size,
     mod = mx.mod.Module(net, label_names=('label',), logger=logger, context=ctx,
                         fixed_param_names=fixed_param_names)
 
-    # fit
+    # fit  : 32, 20
     batch_end_callback = mx.callback.Speedometer(train_iter.batch_size, frequent=frequent)
     epoch_end_callback = mx.callback.do_checkpoint(prefix)
-    iter_refactor = lr_refactor_epoch * imdb.num_images / train_iter.batch_size
+    iter_refactor = lr_refactor_epoch * imdb.num_images / train_iter.batch_size # 20 
     lr_scheduler = mx.lr_scheduler.FactorScheduler(iter_refactor, lr_refactor_ratio)
     optimizer_params={'learning_rate':learning_rate,
                       'momentum':momentum,
@@ -255,7 +262,7 @@ def train_net(net, dataset, image_set, year, devkit_path, batch_size,
             begin_epoch=begin_epoch,
             num_epoch=end_epoch,
             initializer=CustomInitializer(factor_type="in", magnitude=1),
-            arg_params=args,
+            arg_params=args_,
             aux_params=auxs,
             allow_missing=True,
             monitor=monitor)
